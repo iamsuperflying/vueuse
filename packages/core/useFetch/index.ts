@@ -141,35 +141,37 @@ export interface UseFetchOptions {
   immediate?: boolean
 
   /**
-   * Will automatically refetch when:
-   * - the URL is changed if the URL is a ref
-   * - the payload is changed if the payload is a ref
+   * 将在以下情况下自动重新获取:
+   * - 如果 URL 是引用，则 URL 更改的时候
+   * - 如果 payload 是引用，则 payload 更改的时候
    *
    * @default false
    */
   refetch?: MaybeComputedRef<boolean>
 
   /**
-   * Initial data before the request finished
+   * 请求完成之前的初始数据
    *
    * @default null
    */
   initialData?: any
 
   /**
-   * Timeout for abort request after number of millisecond
-   * `0` means use browser default
+   * 请求超时时间
+   * `0` 意味着使用浏览器默认值
    *
    * @default 0
    */
   timeout?: number
 
   /**
+   * 请求拦截器 ???
    * Will run immediately before the fetch request is dispatched
    */
   beforeFetch?: (ctx: BeforeFetchContext) => Promise<Partial<BeforeFetchContext> | void> | Partial<BeforeFetchContext> | void
 
   /**
+   * 响应拦截器 ???
    * Will run immediately after the fetch request is returned.
    * Runs after any 2xx response
    */
@@ -310,30 +312,41 @@ export function useFetch<T>(url: MaybeComputedRef<string>, useFetchOptions: UseF
 export function useFetch<T>(url: MaybeComputedRef<string>, options: RequestInit, useFetchOptions?: UseFetchOptions): UseFetchReturn<T> & PromiseLike<UseFetchReturn<T>>
 
 export function useFetch<T>(url: MaybeComputedRef<string>, ...args: any[]): UseFetchReturn<T> & PromiseLike<UseFetchReturn<T>> {
+  // 是否支持 AbortController
   const supportsAbort = typeof AbortController === 'function'
 
   let fetchOptions: RequestInit = {}
+  // 默认配置 立即执行 refetch: false url 改变的变更监测
   let options: UseFetchOptions = { immediate: true, refetch: false, timeout: 0 }
+  // 内部配置结构
   interface InternalConfig { method: HttpMethod; type: DataType; payload: unknown; payloadType?: string }
+  // 默认 get 请求 类型是 text
   const config: InternalConfig = {
     method: 'GET',
     type: 'text' as DataType,
     payload: undefined as unknown,
   }
 
+  // 携带参数
   if (args.length > 0) {
+    // 如果第一个参数是 FetchOptions
     if (isFetchOptions(args[0]))
+      // 合并配置
       options = { ...options, ...args[0] }
     else
+      // 否则是 fetchOptions RequestInit 类型
       fetchOptions = args[0]
   }
 
   if (args.length > 1) {
+    // 如果第一个参数是 FetchOptions
     if (isFetchOptions(args[1]))
+      // 合并配置
       options = { ...options, ...args[1] }
   }
 
   const {
+    // fetch 也可从 options 中获取 从外部传入
     fetch = defaultWindow?.fetch,
     initialData,
     timeout,
@@ -344,39 +357,49 @@ export function useFetch<T>(url: MaybeComputedRef<string>, ...args: any[]): UseF
   const errorEvent = createEventHook<any>()
   const finallyEvent = createEventHook<any>()
 
+  // 是否结束请求
   const isFinished = ref(false)
+  // 是否正在请求
   const isFetching = ref(false)
+  // 请求是否被取消
   const aborted = ref(false)
   const statusCode = ref<number | null>(null)
   const response = shallowRef<Response | null>(null)
   const error = shallowRef<any>(null)
   const data = shallowRef<T | null>(initialData)
 
+  // 请求是否可以被取消
   const canAbort = computed(() => supportsAbort && isFetching.value)
 
   let controller: AbortController | undefined
   let timer: Stoppable | undefined
 
+  // 取消请求
   const abort = () => {
     if (supportsAbort && controller)
       controller.abort()
   }
 
+  // 重置 fetch 状态
   const loading = (isLoading: boolean) => {
     isFetching.value = isLoading
     isFinished.value = !isLoading
   }
 
+  // 定时取消
   if (timeout)
     timer = useTimeoutFn(abort, timeout, { immediate: false })
 
+  // 请求执行器 (url/payload  改变时会重新执行)
   const execute = async (throwOnFailed = false) => {
+    // debugger
     loading(true)
     error.value = null
     statusCode.value = null
     aborted.value = false
     controller = undefined
 
+    // 配置取消方法
     if (supportsAbort) {
       controller = new AbortController()
       controller.signal.onabort = () => aborted.value = true
@@ -386,6 +409,7 @@ export function useFetch<T>(url: MaybeComputedRef<string>, ...args: any[]): UseF
       }
     }
 
+    // 配置默认请求 method 为 get 和 headers
     const defaultFetchOptions: RequestInit = {
       method: config.method,
       headers: {},
@@ -402,12 +426,15 @@ export function useFetch<T>(url: MaybeComputedRef<string>, ...args: any[]): UseF
         : payload as BodyInit
     }
 
+    // fetch 前的 context
     let isCanceled = false
     const context: BeforeFetchContext = { url: resolveUnref(url), options: { ...defaultFetchOptions, ...fetchOptions }, cancel: () => { isCanceled = true } }
 
+    // 执行 beforeFetch 钩子
     if (options.beforeFetch)
       Object.assign(context, await options.beforeFetch(context))
 
+    // 如果被取消了 则不执行 fetch 请求 直接返回
     if (isCanceled || !fetch) {
       loading(false)
       return Promise.resolve(null)
@@ -418,6 +445,7 @@ export function useFetch<T>(url: MaybeComputedRef<string>, ...args: any[]): UseF
     if (timer)
       timer.start()
 
+    // promise 包裹 fetch 请求
     return new Promise<Response | null>((resolve, reject) => {
       fetch(
         context.url,
@@ -471,16 +499,22 @@ export function useFetch<T>(url: MaybeComputedRef<string>, ...args: any[]): UseF
     })
   }
 
+  // 将 refetch 转换为 ref 对象
   const refetch = resolveRef(options.refetch)
+
+  // refetch / url 改变时 重新执行请求
   watch(
     [
       refetch,
       resolveRef(url),
     ],
-    ([refetch]) => refetch && execute(),
+    ([refetch]) => {
+      refetch && execute()
+    },
     { deep: true },
   )
 
+  // userFetch 的返回值
   const shell: UseFetchReturn<T> = {
     isFinished,
     statusCode,
@@ -512,8 +546,11 @@ export function useFetch<T>(url: MaybeComputedRef<string>, ...args: any[]): UseF
     formData: setType('formData'),
   }
 
+  // 设置请求方法 (get/put/post/delete/patch/head/options)
+  // return: function 执行后会返回 shell
   function setMethod(method: HttpMethod) {
     return (payload?: unknown, payloadType?: string) => {
+      // debugger
       if (!isFetching.value) {
         config.method = method
         config.payload = payload
@@ -574,7 +611,7 @@ export function useFetch<T>(url: MaybeComputedRef<string>, ...args: any[]): UseF
   }
 
   if (options.immediate)
-    setTimeout(execute, 0)
+    setTimeout(execute)
 
   return {
     ...shell,
